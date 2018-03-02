@@ -1,0 +1,24 @@
+language: node_js
+node_js:
+  - "8"
+
+cache: yarn
+
+install:
+  - yarn --prefer-offline
+
+script:
+  - set -e
+  - yarn lint
+  - yarn test:ci
+  - bash <(curl -s https://codecov.io/bash)
+  - yarn build
+  - yarn build:esm
+
+deploy:
+  provider: npm
+  email: abi@hafs.in
+  api_key: $NPM_KEY
+  skip_cleanup: true
+  on:
+    tags: true
