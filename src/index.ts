@@ -1,4 +1,3 @@
-
 export type Loader<T> = () => Promise<T>;
 
 export interface IOptions {
