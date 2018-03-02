@@ -21,13 +21,14 @@
     "build": "tsc",
     "build:esm": "tsc -p tsconfig.esnext.json",
     "test": "jest",
-    "test:ci": "jest --coverage"
+    "test:ci": "jest --coverage --ci --testResultsProcessor=\"jest-junit\""
   },
   "dependencies": {},
   "devDependencies": {
     "@types/jest": "^22.1.4",
     "@types/node": "^9.4.6",
     "jest": "^22.4.2",
+    "jest-junit": "^3.6.0",
     "ts-jest": "^22.4.0",
     "tslint": "^5.9.1",
     "tslint-language-service": "^0.9.8",
