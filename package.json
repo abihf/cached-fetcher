@@ -17,7 +17,7 @@
     "esm/"
   ],
   "scripts": {
-    "lint": "tslint",
+    "lint": "tslint -p tsconfig.json",
     "build": "tsc",
     "build:esm": "tsc -p tsconfig.esnext.json",
     "test": "jest",
