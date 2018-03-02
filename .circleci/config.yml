@@ -3,18 +3,16 @@ jobs:
   build:
     docker:
       - image: circleci/node:8
-
     working_directory: ~/repo
-
     steps:
       - checkout
 
       # Download and cache dependencies
       - restore_cache:
           keys:
-          - v1-dependencies-{{ checksum "yarn.lock" }}
-          # fallback to using the latest cache if no exact match is found
-          - v1-dependencies-
+            - v1-dependencies-{{ checksum "yarn.lock" }}
+            # fallback to using the latest cache if no exact match is found
+            - v1-dependencies-
 
       - run: yarn install --prefer-offline
 
@@ -29,6 +27,30 @@ jobs:
       # run tests!
       - run: yarn test:ci
       - run: bash <(curl -s https://codecov.io/bash)
+      - store_test_results:
+          path: junit.xml
 
       # build typescript
       - run: yarn build
+
+  deploy:
+    docker:
+      - image: circleci/node:8
+    working_directory: ~/repo
+    steps:
+      - run: echo "//registry.npmjs.org/:_authToken=$NPM_TOKEN" >> ~/.npmrc
+      - run: npm publish
+
+workflows:
+  version: 2
+  build-and-deploy:
+    jobs:
+      - build
+      - deploy:
+          requires:
+            - build
+          filters:
+            tags:
+              only: /^v.*/
+            branches:
+              ignore: /.*/
