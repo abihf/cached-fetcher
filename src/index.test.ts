@@ -9,7 +9,7 @@ describe("CacheLoader", () => {
     const loader = jest.fn(async () => random);
     const result = cache.get("simple", loader);
 
-    expect(loader).toHaveBeenCalledTimes(2);
+    expect(loader).toHaveBeenCalledTimes(1);
     return expect(result).resolves.toEqual(random);
   });
 
