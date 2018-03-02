@@ -1,3 +1,4 @@
+var lala: number;
 
 export type Loader<T> = () => Promise<T>;
 
