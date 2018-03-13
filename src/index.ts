@@ -1,94 +1,232 @@
+/**
+ * Fetcher function
+ *
+ * @export
+ * @callback Fetcher
+ * @param {string} key
+ * @param {object} params
+ * @param {CachedFetcher} instance
+ * @returns {Promise<T>}
+ * @template T data type
+ */
+export type Fetcher<T> = (key: string, params: any, instance: CachedFetcher<T>) => Promise<T>;
 
-export type Loader<T> = () => Promise<T>;
+/**
+ * Configuration for CachedFetcher constructor
+ *
+ * @export
+ * @interface IConfig
+ * @template T data type
+ */
+export interface IConfig<T> {
+  /**
+   * Default fetcher function
+   *
+   * @type {Fetcher}
+   * @memberof IConfig
+   */
+  fetcher: Fetcher<T>;
 
-export interface IOptions {
-  defaultTtl: number;
+  /**
+   * Cache duration before it marked as stale
+   *
+   * @type {number}
+   * @memberof IConfig
+   */
+  ttl: number;
+
+  /**
+   * in miliseconds. 0 to disable automatic clean old cache
+   *
+   * @type {number}
+   * @memberof IConfig
+   */
   cleanInterval: number;
+
+  /**
+   * Cache the fetcher result even it thrown an error
+   *
+   * @type {boolean}
+   * @memberof IConfig
+   */
+  cacheError: boolean;
+
+  /**
+   * Enable experimental double buffering feature.
+   * This will allow CacheLoader to return stale value and fetch new value in background.
+   *
+   * @type {boolean}
+   * @memberof IConfig
+   */
+  doubleBuffer: boolean;
 }
 
-export interface IGetOptions {
+/**
+ * Option for CachedFetcher.fetch()
+ *
+ * @export
+ * @interface IFetchOptions
+ * @template T Data type
+ */
+export interface IFetchOptions<T> {
+  /**
+   * Parameter to pass to the fetcher
+   *
+   * @type {*}
+   * @memberof IFetchOptions
+   */
+  params?: any;
+
+  /**
+   * Override default fetcher for this call
+   */
   ttl?: number;
+
+  /**
+   * Enable double buffering for this item.
+   *
+   * @type {boolean}
+   * @memberof IFetchOptions
+   */
   doubleBuffer?: boolean;
+
+  /**
+   * Override fetcher for this key
+   *
+   * @type {Fetcher<T>}
+   * @memberof IFetchOptions
+   */
+  fetcher?: Fetcher<T>;
 }
 
 interface IPromiseExecutor {
-  resolve: (result: any) => void;
-  reject: (error: Error) => void;
+  resolve: (result?: any) => void;
+  reject: (error?: Error) => void;
 }
 
-interface ICacheItem {
-  value: any;
+interface ICacheItem<T> {
+  value?: T;
+  hasError: boolean;
+  error?: Error;
   expire?: number;
   isFetching: boolean;
   queue: IPromiseExecutor[];
 }
 
-export interface IGetOptions {
-  ttl?: number;
-  doubleBuffer?: boolean;
-}
-
-const defaultOptions: IOptions = {
+const defaultConfig: IConfig<any> = {
+  cacheError: false,
   cleanInterval: 0,
-  defaultTtl: 60000, // 60 second
+  doubleBuffer: false,
+  fetcher: () => Promise.reject(new Error('You must define the fetcher')),
+  ttl: 60000, // 60 second
 };
 
-export default class CacheLoader {
-  private items: { [name: string]: ICacheItem };
-  private options: IOptions;
+/**
+ * Main Class
+ *
+ * @example
+ * const cache = new CachedFetcher<Post>((id) => fetch({url: `https://example.com/posts/${id}`));
+ * const data = await cache.fetch('123');
+ *
+ * @export
+ * @class CachedFetcher
+ * @template T Data type
+ */
+export class CachedFetcher<T> {
+  private items: { [name: string]: ICacheItem<T> };
+  private config: IConfig<T>;
   private cleanIntervalHandler?: NodeJS.Timer = undefined;
 
-  constructor(options: Partial<IOptions> = {}) {
-    this.options = { ...defaultOptions, ...options };
+  /**
+   * Creates an instance of CachedFetcher.
+   * @param {(Partial<IConfig<T>> | Fetcher<T>)} config Optional config. See #IConfig
+   * @param {Fetcher<T>} [fetcher] Fetcher
+   * @memberof CachedFetcher
+   */
+  constructor(config: Partial<IConfig<T>> | Fetcher<T>, fetcher?: Fetcher<T>) {
     this.items = {};
-    if (this.options.cleanInterval > 0) {
-      this.cleanIntervalHandler = setInterval(() => this.clean(), this.options.cleanInterval);
+    if (typeof config === 'function') {
+      this.config = { ...defaultConfig, fetcher: config };
+    } else {
+      this.config = { ...defaultConfig, ...config };
+      if (fetcher !== undefined) {
+        this.config.fetcher = fetcher;
+      }
     }
+
+    this.startCacheCleaner();
   }
 
-  public get<T>(name: string, loader: Loader<T>, options: IGetOptions = {}): Promise<T> {
-    const cachedItem = this.items[name];
+  /**
+   * Get cached item
+   *
+   * @async
+   * @param {string} key item's name
+   * @param {IFetchOptions<T>} [options={}] custom fetch options
+   * @returns {Promise<T>} promise that resolve actual item
+   * @memberof CachedFetcher
+   */
+  public get(key: string, options: IFetchOptions<T> = {}): Promise<T> {
+    const cachedItem = this.items[key];
+    const doubleBuffer = options.doubleBuffer || this.config.doubleBuffer;
     if (cachedItem !== undefined) {
       if (cachedItem.isFetching) {
         return new Promise<T>((resolve, reject) => cachedItem.queue.push({ resolve, reject }));
       }
       if (
-        options.doubleBuffer ||
+        doubleBuffer ||
         cachedItem.expire === undefined ||
         cachedItem.expire >= new Date().valueOf()
       ) {
-        return Promise.resolve<T>(cachedItem.value);
+        if (cachedItem.hasError) {
+          return Promise.reject(cachedItem.error);
+        }
+        return Promise.resolve<T>(cachedItem.value as T);
       }
     }
-    // else: item is not found or expired
 
-    return new Promise<T>((resolve, reject) => {
-      const newItem: ICacheItem = {
-        isFetching: true,
-        queue: [{ resolve, reject }],
-        value: undefined,
-      };
-      if (cachedItem === undefined || !options.doubleBuffer) {
-        this.items[name] = newItem;
-      }
+    const newItem: ICacheItem<T> = {
+      hasError: false,
+      isFetching: true,
+      queue: [],
+      value: undefined,
+    };
+    if (cachedItem === undefined || !options.doubleBuffer) {
+      this.items[key] = newItem;
+    }
+    const resultPromise = new Promise<T>(
+      (resolve, reject) => newItem.queue.push({ resolve, reject }),
+    );
 
-      loader()
+    const fetcher: Fetcher<T> = options.fetcher || this.config.fetcher;
+    fetcher(key, options.params, this)
       .then((value: T) => {
         newItem.value = value;
-        newItem.isFetching = false;
-        this.items[name] = newItem;
-
-        const ttl: number = options.ttl !== undefined ? options.ttl : this.options.defaultTtl || 0;
-        if (ttl > 0) {
-          newItem.expire = new Date().valueOf() + ttl;
-        }
-        newItem.queue.forEach(({ resolve: resolveQueue }) => resolveQueue(value));
       })
-      .catch((error) => {
-        this.invalidate(name);
-        newItem.queue.forEach(({ reject: rejectQueue }) => rejectQueue(error));
+      .catch((error: Error) => {
+        newItem.hasError = true;
+        newItem.error = error;
+      }).then(() => {
+        if (newItem.hasError) {
+          newItem.queue.forEach(({ reject }) => reject(newItem.error));
+        } else {
+          newItem.queue.forEach(({ resolve }) => resolve(newItem.value));
+        }
+        if (!newItem.hasError || this.config.cacheError) {
+          const ttl: number = options.ttl !== undefined
+            ? options.ttl
+            : this.config.ttl || 0;
+          if (ttl > 0) {
+            newItem.expire = new Date().valueOf() + ttl;
+          }
+          this.items[key] = newItem;
+        } else {
+          this.invalidate(key);
+        }
+        newItem.isFetching = false;
       });
-    });
+
+    return resultPromise;
   }
 
   public clean() {
@@ -109,6 +247,14 @@ export default class CacheLoader {
     this.items = {};
   }
 
+  public startCacheCleaner(interval?: number) {
+    this.stopCacheCleaner();
+    const realInterval = interval || this.config.cleanInterval;
+    if (realInterval) {
+      this.cleanIntervalHandler = setInterval(() => this.clean(), realInterval);
+    }
+  }
+
   public stopCacheCleaner() {
     if (this.cleanIntervalHandler) {
       clearInterval(this.cleanIntervalHandler);
@@ -116,3 +262,6 @@ export default class CacheLoader {
     }
   }
 }
+
+// also export default
+export default CachedFetcher;
